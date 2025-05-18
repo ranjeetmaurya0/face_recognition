@@ -1,0 +1,73 @@
+import os
+import cv2
+import numpy as np
+from PIL import Image
+from keras.models import load_model
+from sklearn.preprocessing import Normalizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Load OpenCV Haar cascade
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+# Load FaceNet model
+model = load_model('facenet_keras.h5')
+print("FaceNet Loaded")
+
+l2_normalizer = Normalizer('l2')
+
+# Detect face using OpenCV and return 160x160 cropped face
+def detect_face_opencv(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+    if len(faces) == 0:
+        return None
+
+    x, y, w, h = faces[0]
+    face = img[y:y+h, x:x+w]
+    face = cv2.resize(face, (160, 160))
+    face = Image.fromarray(face)
+    return np.asarray(face)
+
+# Generate FaceNet embedding
+def get_embedding(face_pixels):
+    face_pixels = face_pixels.astype('float32')
+    mean, std = face_pixels.mean(), face_pixels.std()
+    face_pixels = (face_pixels - mean) / std
+    sample = np.expand_dims(face_pixels, axis=0)
+    return model.predict(sample)[0]
+
+# Build face database
+def build_face_database(directory='faces'):
+    face_db = {}
+    for person in os.listdir(directory):
+        person_dir = os.path.join(directory, person)
+        for img_file in os.listdir(person_dir):
+            path = os.path.join(person_dir, img_file)
+            face = detect_face_opencv(path)
+            if face is not None:
+                emb = get_embedding(face)
+                norm_emb = l2_normalizer.transform([emb])[0]
+                face_db[person] = norm_emb
+                break
+    return face_db
+
+# Recognize unknown face
+def recognize(image_path, face_db):
+    face = detect_face_opencv(image_path)
+    if face is None:
+        return "No face detected"
+    emb = get_embedding(face)
+    norm_emb = l2_normalizer.transform([emb])[0]
+
+    identity = "Unknown"
+    max_sim = -1
+
+    for name, db_emb in face_db.items():
+        sim = cosine_similarity([norm_emb], [db_emb])[0][0]
+        if sim > max_sim and sim > 0.5:
+            max_sim = sim
+            identity = name
+
+    return identity
